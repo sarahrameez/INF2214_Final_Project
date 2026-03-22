@@ -152,7 +152,8 @@ services:
         condition: service_completed_successfully
     volumes:
       - ./src:/app/src
-    command: python /app/src/data_generator.py
+      - ./data:/app/data
+    command: python -u /app/src/data_generator.py
 
   # ---------------------------------------------------------------------------
   # Live Dashboard

@@ -41,7 +41,6 @@ Usage:
     python src/data_generator.py
 """
 
-
 import csv
 import json
 import time
@@ -56,7 +55,7 @@ from kafka.errors import NoBrokersAvailable
 # Configuration
 KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP", "kafka:9092")
 TOPIC           = "ride-events"
-CSV_PATH = os.getenv("DATA_FILE", "data/dynamic_pricing.csv")
+CSV_PATH = os.getenv("DATA_FILE", "/app/data/dynamic_pricing.csv")
 
 # Ride Event Factory
 # One rideshare event per .csv row. 
