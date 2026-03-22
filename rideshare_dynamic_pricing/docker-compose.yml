@@ -1,4 +1,4 @@
-# docker-compose.yml -- Kafka + Flink Fraud Detection Tutorial
+# docker-compose.yml -- Kafka + Flink Rideshare Pricing Tutorial
 # =============================================================
 #
 # Services
@@ -7,16 +7,16 @@
 #   init-kafka     One-shot container that creates the required topics
 #   jobmanager     Flink JobManager (cluster coordinator)
 #   taskmanager    Flink TaskManager (executes operators)
-#   detector       Submits the PyFlink fraud detection job to the cluster
-#   generator      Publishes simulated transactions to Kafka
-#   dashboard      Consumes fraud-alerts from Kafka, serves live web UI
+#   detector       Submits the PyFlink rideshare pricing job to the cluster
+#   generator      Publishes rideshare events to Kafka
+#   dashboard      Consumes pricing-alerts from Kafka, serves live web UI
 #
 # Usage
 # -----
 #   docker-compose up --build          start everything
 #   docker-compose down                stop and remove containers
 #   docker-compose logs -f detector    follow detector logs
-#   http://localhost:8050              live fraud dashboard
+#   http://localhost:8050              live pricing dashboard
 #   http://localhost:8081              Flink Web UI
 # =============================================================
 
@@ -41,7 +41,7 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_LOG_RETENTION_HOURS: 2
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
-      CLUSTER_ID: "fraud-detection-cluster-01"
+      CLUSTER_ID: "rideshare-pricing-cluster-01"
     ports:
       - "9092:9092"
     healthcheck:
@@ -64,8 +64,8 @@ services:
       - /bin/bash
       - -c
       - >-
-        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic transactions --partitions 4 --replication-factor 1 &&
-        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic fraud-alerts --partitions 1 --replication-factor 1 &&
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic ride-events --partitions 4 --replication-factor 1 &&
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic pricing-alerts --partitions 1 --replication-factor 1 &&
         echo "Topics created."
     restart: "no"
 
@@ -111,7 +111,7 @@ services:
         taskmanager.numberOfTaskSlots: 4
 
   # ---------------------------------------------------------------------------
-  # Fraud Detector (submits PyFlink job to the Flink cluster)
+  # Pricing Detector (submits PyFlink job to the Flink cluster)
   # ---------------------------------------------------------------------------
   detector:
     build:
@@ -136,11 +136,11 @@ services:
       - >-
         echo "Waiting for Flink cluster to be ready..." &&
         sleep 5 &&
-        echo "Submitting fraud detection job..." &&
-        /opt/flink/bin/flink run --jobmanager jobmanager:8081 --python /app/src/fraud_detector.py --pyFiles /app/src
+        echo "Submitting rideshare pricing job..." &&
+        /opt/flink/bin/flink run --jobmanager jobmanager:8081 --python /app/src/dynamic_pricing_enging.py --pyFiles /app/src
 
   # ---------------------------------------------------------------------------
-  # Transaction Generator
+  # Rideshare Event Generator
   # ---------------------------------------------------------------------------
   generator:
     build:

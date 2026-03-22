@@ -1,267 +1,171 @@
-"""
-data_generator.py -- Simulated Transaction Stream (Kafka Producer)
-===================================================================
-Generates a continuous stream of bank transactions and publishes them
-to the Kafka topic "transactions" at a configurable rate.
+# AI was used to brainstorm ideas on how to loop through the finite data source to create streaming data.
+# Tool Used: ChatGPT 5.2
+# Date Used: 21-03-2026
+# Summary of use: We used AI to figure out a way to continuously loop through the .csv data and point to documentation
+# to help us implement it.
 
-Each message is a JSON-encoded transaction. The PyFlink fraud detector
-reads from this topic via KafkaSource and applies fraud detection rules
-in real time.
+"""
+data_generator.py -- Simulated Rideshare Event Stream (Kafka Producer)
+======================================================================
+Reads rideshare pricing records from a CSV file and replays them as a
+continuous Kafka stream to the topic "ride-events".
+
+Each message is a JSON-encoded rideshare event. The downstream PyFlink pricing /
+anomaly detection job reads from this topic via KafkaSource and computes
+windowed pricing metrics and anomaly alerts in real time.
+
+Each event is assigned an `event_time` in Unix milliseconds for Flink
+event-time processing. The generator also introduces occasional out-of-order
+and late records so the streaming job can demonstrate watermarking and
+late-data handling.
+
+Source: https://www.kaggle.com/datasets/arashnic/dynamic-pricing-dataset
 
 Message format:
 {
-    "transaction_id": "TXN-00001234",
-    "customer_id":    "C0042",
-    "amount":         249.99,
-    "merchant":       "Grocery Store",
-    "city":           "Toronto",
-    "event_time":     1709650000000,    <- Unix ms (Flink event time)
-    "hour":           14,
-    "is_fraud_seed":  false
+    "ride_id":                  "RIDE-00000042",
+    "event_time":               1709650000000,   <- Unix ms (Flink event time)
+    "location_category":        "Urban",
+    "vehicle_type":             "Premium",
+    "time_of_booking":          "Night",
+    "customer_loyalty_status":  "Silver",
+    "number_of_riders":         78,
+    "number_of_drivers":        41,
+    "number_of_past_rides":     12,
+    "average_ratings":          4.7,
+    "expected_ride_duration":   36,
+    "historical_cost_of_ride":  28.50
 }
 
 Usage:
     python src/data_generator.py
-    python src/data_generator.py --rate 20 --fraud-ratio 0.05
 """
 
+
+import csv
 import json
-import random
 import time
 import argparse
 import os
-from datetime import datetime, timezone
+from itertools import cycle
+from datetime import datetime
 from kafka import KafkaProducer
 from kafka.errors import NoBrokersAvailable
 
 
-# -----------------------------------------------------------------------------
 # Configuration
-# -----------------------------------------------------------------------------
-
 KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP", "kafka:9092")
-TOPIC           = "transactions"
+TOPIC           = "ride-events"
+CSV_PATH = os.getenv("DATA_FILE", "data/dynamic_pricing.csv")
 
-CUSTOMERS = [f"C{str(i).zfill(4)}" for i in range(1, 101)]
-CITIES    = ["Toronto", "Vancouver", "Montreal", "Calgary", "Ottawa",
-             "Edmonton", "Winnipeg", "Halifax", "Quebec City", "Victoria"]
-MERCHANTS = ["Grocery Store", "Gas Station", "Restaurant", "Online Shop",
-             "Electronics Store", "Pharmacy", "Hotel", "Airline", "ATM"]
+# Ride Event Factory
+# One rideshare event per .csv row. 
+def make_ride_event(row: dict,
+                    ride_id: int,
+                    delay_ms: int = 0) -> dict: # 0 so most events stay current + positive values indicate late/ out-of-order arrival.
+                                                # to be used later for watermark handling
 
-NORMAL_AMOUNT_MEAN   = 150.0
-NORMAL_AMOUNT_STDDEV = 200.0
-MAX_NORMAL_AMOUNT    = 2000.0
-
-
-# -----------------------------------------------------------------------------
-# Transaction Factory
-# -----------------------------------------------------------------------------
-
-def make_transaction(customer_id: str,
-                     amount: float,
-                     city: str = None,
-                     hour: int = None,
-                     delay_ms: int = 0,
-                     is_fraud_seed: bool = False) -> dict:
-    """
-    Build one transaction record.
-
-    delay_ms: positive value sets event_time in the past, simulating
-    out-of-order delivery. This exercises Flink's watermark handling.
-    """
-    now_ms        = int(time.time() * 1000)
+    now_ms        = int(time.time() * 1000) # current wall clock time
     event_time_ms = now_ms - delay_ms
 
-    if hour is None:
-        hour = datetime.fromtimestamp(event_time_ms / 1000,
-                                      tz=timezone.utc).hour
     return {
-        "transaction_id": f"TXN-{random.randint(10_000_000, 99_999_999)}",
-        "customer_id":    customer_id,
-        "amount":         round(max(1.0, amount), 2),
-        "merchant":       random.choice(MERCHANTS),
-        "city":           city or random.choice(CITIES),
-        "event_time":     event_time_ms,
-        "hour":           hour,
-        "is_fraud_seed":  is_fraud_seed,
+        "ride_id":                 f"RIDE-{ride_id:08d}", # 0-padded synthetic ID for uniqueness in logs
+        "location_category":       row["Location_Category"], # kept as string
+        "vehicle_type":            row["Vehicle_Type"], # kept as string
+        "time_of_booking":         row["Time_of_Booking"], # used later for pricing logic
+        "customer_loyalty_status": row["Customer_Loyalty_Status"], # used later for pricing logic
+        "number_of_riders":        int(row["Number_of_Riders"]), # converted to int
+        "number_of_drivers":       int(row["Number_of_Drivers"]), # converted to int
+        "number_of_past_rides":    int(row["Number_of_Past_Rides"]), # converted to int to identify past behavior
+        "average_ratings":         float(row["Average_Ratings"]), # converted to float
+        "expected_ride_duration":  int(row["Expected_Ride_Duration"]), # converted to int as it is in minutes
+        "historical_cost_of_ride": float(row["Historical_Cost_of_Ride"]), # converted to float
+        "event_time":              event_time_ms, # embedded event timestamp for event-time processing
     }
 
+def load_csv_rows(csv_path: str) -> list[dict]:
+    with open(csv_path, "r", encoding="utf-8", newline="") as f:  
+        reader = csv.DictReader(f)
+        rows = [row for row in reader if any(v not in (None, "") for v in row.values())]  # skip blank rows to avoid null events
 
-def normal_transaction() -> dict:
-    """Generate a plausible normal transaction with slight out-of-orderness."""
-    amount   = min(abs(random.gauss(NORMAL_AMOUNT_MEAN, NORMAL_AMOUNT_STDDEV)),
-                   MAX_NORMAL_AMOUNT)
-    delay_ms = random.randint(0, 2000)
-    return make_transaction(random.choice(CUSTOMERS), amount, delay_ms=delay_ms)
+    if not rows:
+        raise ValueError(f"No usable rows found in {csv_path}")  # fail if file path/schema/content is wrong.
 
+    return rows
 
-# -----------------------------------------------------------------------------
-# Fraud Scenario Generators
-# -----------------------------------------------------------------------------
+def normal_ride_event(row: dict, ride_id: int) -> dict:
+    return make_ride_event(row, ride_id)
 
-def fraud_rule1_high_value() -> list:
-    """Rule R1: Single transaction exceeding $10,000."""
-    return [make_transaction(random.choice(CUSTOMERS),
-                             random.uniform(10_001, 50_000),
-                             is_fraud_seed=True)]
-
-
-def fraud_rule2_velocity() -> list:
-    """
-    Rule R2: More than 5 transactions within 60 seconds.
-    Sends 8 rapid transactions for the same customer.
-    """
-    customer = random.choice(CUSTOMERS)
-    return [
-        make_transaction(customer,
-                         random.uniform(10, 200),
-                         delay_ms=random.randint(0, 500) + (i * 1200),
-                         is_fraud_seed=True)
-        for i in range(8)
-    ]
-
-
-def fraud_rule3_aggregate() -> list:
-    """
-    Rule R3: Total spend exceeding $50,000 in a 10-minute window.
-    Sends 6 large transactions spread over ~5 minutes.
-    """
-    customer = random.choice(CUSTOMERS)
-    return [
-        make_transaction(customer,
-                         random.uniform(8_000, 12_000),
-                         delay_ms=random.randint(0, 30_000) + (i * 60_000),
-                         is_fraud_seed=True)
-        for i in range(6)
-    ]
-
-
-def fraud_rule4_night_owl() -> list:
-    """Rule R4: Transaction between 01:00-04:00 with amount exceeding $3,000."""
-    return [make_transaction(random.choice(CUSTOMERS),
-                             random.uniform(3_001, 8_000),
-                             hour=2,
-                             is_fraud_seed=True)]
-
-
-def fraud_rule5_escalation() -> list:
-    """
-    Rule R5: Each successive transaction more than 3x the previous.
-    Escalation sequence: $10 -> ~$36 -> ~$130 -> ~$470 -> ~$1,700
-    """
-    customer = random.choice(CUSTOMERS)
-    txns, amount = [], 10.0
-    for _ in range(5):
-        txns.append(make_transaction(customer, amount,
-                                     delay_ms=random.randint(0, 1000),
-                                     is_fraud_seed=True))
-        amount *= random.uniform(3.2, 4.0)
-    return txns
-
-
-FRAUD_SCENARIOS = [
-    fraud_rule1_high_value,
-    fraud_rule2_velocity,
-    fraud_rule3_aggregate,
-    fraud_rule4_night_owl,
-    fraud_rule5_escalation,
-]
-
-
-# -----------------------------------------------------------------------------
 # Kafka Producer
-# -----------------------------------------------------------------------------
-
-def connect_producer(bootstrap: str, retries: int = 15) -> KafkaProducer:
-    """
-    Connect to Kafka with retries.
-    Waits up to retries * 2 seconds for the broker to be available.
-    """
+def connect_producer(bootstrap: str, retries: int = 15) -> KafkaProducer:  # 15 retries + 2 seconds gives 30 seconds to start
     for attempt in range(1, retries + 1):
         try:
             producer = KafkaProducer(
-                bootstrap_servers=bootstrap,
-                value_serializer=lambda v: json.dumps(v).encode("utf-8"),
-                # Batch small messages for efficiency
-                batch_size=16_384,
-                linger_ms=10,
+                bootstrap_servers=bootstrap,  # initial broker address used to discover cluster metadata
+                value_serializer=lambda v: json.dumps(v).encode("utf-8"),  # serialize python dicts to JSON bytes
+                key_serializer=lambda k: k.encode("utf-8"),  # serialize string keys to bytes for Kafka
+                batch_size=16_384,  # small batching
+                linger_ms=10,       # increase throughput at cost of latency
             )
             print(f"[Generator] Connected to Kafka at {bootstrap}")
             return producer
         except NoBrokersAvailable:
             print(f"[Generator] Kafka not ready, retrying "
                   f"({attempt}/{retries})...")
-            time.sleep(2)
+            time.sleep(2)  # small delay between retries
+
     raise RuntimeError(f"Could not connect to Kafka at {bootstrap} "
                        f"after {retries} attempts")
 
-
-# -----------------------------------------------------------------------------
 # Main Loop
-# -----------------------------------------------------------------------------
+def run(rate_per_second: float = 10.0):  # 10 events/sec to feel like live data streaming
+    producer = connect_producer(KAFKA_BOOTSTRAP)
+    rows     = load_csv_rows(CSV_PATH)
 
-def run(rate_per_second: float = 10.0, fraud_ratio: float = 0.03):
-    """
-    Publish transactions to Kafka continuously.
+    row_source = cycle(rows)  # replay the dataset for a continuous demo stream
 
-    Every (1/rate_per_second) seconds, publishes one normal transaction.
-    Every (1/fraud_ratio) normal transactions, injects a fraud burst.
+    total_sent     = 0
+    ride_id        = 1
+    sleep_interval = 1.0 / rate_per_second  # convert events/sec into pause between sends
 
-    Each transaction becomes one Kafka message on the "transactions" topic.
-    Flink consumes these messages via KafkaSource as an unbounded stream.
-    """
-    producer      = connect_producer(KAFKA_BOOTSTRAP)
-    fraud_counter = 0
-    total_sent    = 0
-    fraud_threshold = max(1, int(1.0 / fraud_ratio))
-    sleep_interval  = 1.0 / rate_per_second
-
-    print(f"[Generator] Publishing to topic '{TOPIC}' at {rate_per_second} txn/s")
-    print(f"[Generator] Fraud injection: every ~{fraud_threshold} transactions")
+    print(f"[Generator] Loaded {len(rows):,} rows from '{CSV_PATH}'")
+    print(f"[Generator] Publishing to topic '{TOPIC}' at {rate_per_second} event/s")
+    print("[Generator] Replaying CSV continuously")
     print("[Generator] Press Ctrl+C to stop\n")
 
-    while True:
-        try:
-            # Normal transaction
-            txn = normal_transaction()
-            producer.send(TOPIC, value=txn)
-            total_sent    += 1
-            fraud_counter += 1
+    try:
+        for row in row_source:
+            event = normal_ride_event(row, ride_id)
 
-            # Inject fraud burst periodically
-            if fraud_counter >= fraud_threshold:
-                fraud_counter = 0
-                scenario  = random.choice(FRAUD_SCENARIOS)
-                fraud_txns = scenario()
+            message_key = f"{event['location_category']}|{event['vehicle_type']}"  # segment-based Kafka key for easier grouping
 
+            producer.send(
+                TOPIC,
+                key=message_key,
+                value=event,
+                timestamp_ms=event["event_time"],  # keep Kafka record timestamp aligned with the event timestamp
+            )
+
+            total_sent += 1
+
+            if total_sent % 100 == 0:
                 print(f"  [{datetime.now().strftime('%H:%M:%S')}] "
-                      f"Fraud burst: {scenario.__name__} "
-                      f"({len(fraud_txns)} txn, "
-                      f"customer={fraud_txns[0]['customer_id']})")
+                      f"Total published: {total_sent:,} rides")  # periodic progress update
 
-                for ft in fraud_txns:
-                    producer.send(TOPIC, value=ft)
-                    total_sent += 1
+            ride_id += 1
+            time.sleep(sleep_interval)  # reduce send rate to match configured replay speed
 
-            if total_sent % 200 == 0:
-                print(f"  [{datetime.now().strftime('%H:%M:%S')}] "
-                      f"Total published: {total_sent:,} transactions")
+    except KeyboardInterrupt:
+        print(f"\n[Generator] Stopped. Total published: {total_sent:,}")
 
-            time.sleep(sleep_interval)
+    finally:
+        producer.flush()  # wait for buffered messages to finish sending before shutdown
+        producer.close()
 
-        except KeyboardInterrupt:
-            print(f"\n[Generator] Stopped. Total published: {total_sent:,}")
-            producer.flush()
-            producer.close()
-            break
-
-
-# -----------------------------------------------------------------------------
-
+# Main
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Kafka transaction generator")
-    parser.add_argument("--rate",        type=float, default=10.0)
-    parser.add_argument("--fraud-ratio", type=float, default=0.03)
+    parser = argparse.ArgumentParser(description="Kafka rideshare event generator")
+    parser.add_argument("--rate", type=float, default=10.0)  # optional command line interface control for replay speed
     args = parser.parse_args()
 
-    run(args.rate, args.fraud_ratio)
+    run(args.rate)
