@@ -1,0 +1,4 @@
+apache-flink==1.19.3
+setuptools<81
+pandas
+streamlit

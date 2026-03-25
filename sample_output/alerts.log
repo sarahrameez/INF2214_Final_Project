@@ -1,0 +1,16 @@
+{"ema_baseline":15.0,"request_count":15,"status":"INITIALIZING","timestamp":"2026-03-23T18:00:15Z","zone":"Downtown"}
+{"ema_baseline":15.0,"request_count":15,"status":"INITIALIZING","timestamp":"2026-03-23T18:00:15Z","zone":"Airport"}
+{"ema_baseline":15.0,"request_count":15,"status":"INITIALIZING","timestamp":"2026-03-23T18:00:15Z","zone":"University_Campus"}
+{"ema_baseline":15.0,"request_count":15,"status":"INITIALIZING","timestamp":"2026-03-23T18:00:15Z","zone":"Suburb_North"}
+{"ema_baseline":15.0,"request_count":90,"status":"SURGE_ALERT","timestamp":"2026-03-23T18:00:30Z","zone":"Downtown"}
+{"ema_baseline":15.0,"request_count":15,"status":"NORMAL","timestamp":"2026-03-23T18:00:30Z","zone":"Suburb_North"}
+{"ema_baseline":15.0,"request_count":15,"status":"NORMAL","timestamp":"2026-03-23T18:00:30Z","zone":"University_Campus"}
+{"ema_baseline":15.0,"request_count":15,"status":"NORMAL","timestamp":"2026-03-23T18:00:30Z","zone":"Airport"}
+{"ema_baseline":30.0,"request_count":15,"status":"NORMAL","timestamp":"2026-03-23T18:00:45Z","zone":"Downtown"}
+{"ema_baseline":15.0,"request_count":15,"status":"NORMAL","timestamp":"2026-03-23T18:00:45Z","zone":"Suburb_North"}
+{"ema_baseline":15.0,"request_count":15,"status":"NORMAL","timestamp":"2026-03-23T18:00:45Z","zone":"University_Campus"}
+{"ema_baseline":15.0,"request_count":15,"status":"NORMAL","timestamp":"2026-03-23T18:00:45Z","zone":"Airport"}
+{"ema_baseline":27.0,"request_count":5,"status":"NORMAL","timestamp":"2026-03-23T18:01:00Z","zone":"Downtown"}
+{"ema_baseline":15.0,"request_count":5,"status":"NORMAL","timestamp":"2026-03-23T18:01:00Z","zone":"University_Campus"}
+{"ema_baseline":15.0,"request_count":5,"status":"NORMAL","timestamp":"2026-03-23T18:01:00Z","zone":"Airport"}
+{"ema_baseline":15.0,"request_count":5,"status":"NORMAL","timestamp":"2026-03-23T18:01:00Z","zone":"Suburb_North"}
